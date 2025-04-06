@@ -1,5 +1,5 @@
-import oneByOne from './oneByOne';
+import async from './async';
 
 export default {
-  ...oneByOne,
+  async,
 };
