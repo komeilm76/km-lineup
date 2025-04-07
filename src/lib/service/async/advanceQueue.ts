@@ -13,6 +13,7 @@ type IQueueEntryOptions<OUTPUT, NAME extends string> = {
   outputs: IQueueOutputShape<OUTPUT, NAME>[];
   liveDetails: ILiveDetails;
   firstItem: boolean;
+  isStoped: boolean;
 };
 type ILiveDetails = {
   passed: number;
@@ -28,6 +29,8 @@ type IQueueOutputShape<OUTPUT, NAME extends string = string> = {
   actionType: IActionType;
   order: number;
 };
+
+type IQueueOnFinish<OUTPUT, NAME extends string> = IQueueEntryOptions<OUTPUT, NAME>;
 
 const makeAction = <OUTPUT, NAME extends string = string>(
   item: IQueueEntry<NAME, OUTPUT>,
@@ -111,57 +114,72 @@ export const advanceQueue = <NAME extends string = string, OUTPUT = any>(
   items: IQueueEntry<NAME, OUTPUT>[],
   onRecord: ReplaySubject<IQueueOutputShape<OUTPUT, NAME>> = new ReplaySubject(items.length),
   onLive: Subject<IQueueOutputShape<OUTPUT, NAME>> = new Subject(),
-  onFinish: ReplaySubject<IQueueOutputShape<OUTPUT, NAME>[]> = new ReplaySubject(1),
+  onFinish: ReplaySubject<IQueueOnFinish<OUTPUT, NAME>> = new ReplaySubject(1),
+  onStop: ReplaySubject<IQueueOnFinish<OUTPUT, NAME>> = new ReplaySubject(1),
   liveDetails: ReplaySubject<ILiveDetails> = new ReplaySubject<ILiveDetails>(1),
   options: IQueueEntryOptions<OUTPUT, NAME> = {
     outputs: [],
     liveDetails: { fails: 0, passed: 0, finished: 0, total: items.length },
     firstItem: true,
+    isStoped: true,
   }
 ) => {
   if (options.firstItem == true) {
+    options.isStoped = false;
     liveDetails.next(options.liveDetails);
     options.firstItem = false;
   }
   return {
     start: () => {
-      let sortedItems = orderActions(items);
-      let item = _.first(sortedItems);
-      if (item !== undefined) {
-        makeAction(item, (v) => {
-          if (v.status == 'success') {
+      if (options.isStoped == false) {
+        let sortedItems = orderActions(items);
+        let item = _.first(sortedItems);
+        if (item !== undefined) {
+          makeAction(item, (v) => {
+            if (v.status == 'success') {
+              options.liveDetails = {
+                ...options.liveDetails,
+                passed: options.liveDetails.passed + 1,
+              };
+              liveDetails.next(options.liveDetails);
+            } else if (v.status == 'error') {
+              options.liveDetails = {
+                ...options.liveDetails,
+                fails: options.liveDetails.fails + 1,
+              };
+              liveDetails.next(options.liveDetails);
+            }
             options.liveDetails = {
               ...options.liveDetails,
-              passed: options.liveDetails.passed + 1,
+              finished: options.liveDetails.finished + 1,
             };
             liveDetails.next(options.liveDetails);
-          } else if (v.status == 'error') {
-            options.liveDetails = {
-              ...options.liveDetails,
-              fails: options.liveDetails.fails + 1,
-            };
-            liveDetails.next(options.liveDetails);
-          }
-          options.liveDetails = {
-            ...options.liveDetails,
-            finished: options.liveDetails.finished + 1,
-          };
-          liveDetails.next(options.liveDetails);
-          options.outputs = [...options.outputs, v];
-          onRecord.next(v);
-          onLive.next(v);
-          let newList = _.drop(sortedItems);
-          advanceQueue(newList, onRecord, onLive, onFinish, liveDetails, options).start();
-        });
-      } else {
-        onFinish.next(options.outputs);
+            options.outputs = [...options.outputs, v];
+            onRecord.next(v);
+            onLive.next(v);
+            let newList = _.drop(sortedItems);
+            advanceQueue(newList, onRecord, onLive, onFinish, onStop, liveDetails, options).start();
+          });
+        } else {
+          options.isStoped = true;
+          onFinish.next(options);
+        }
       }
+      return {
+        onFinish,
+      };
     },
     onRecord,
     onLive,
     onFinish,
+    onStop,
     liveDetails,
-    total: items.length,
+    totalItems: items.length,
+    stop: () => {
+      options.isStoped = true;
+      onStop.next(options);
+      onFinish.next(options);
+    },
   };
 };
 

@@ -10,6 +10,7 @@ type IQueueEntryOptions<OUTPUT> = {
   outputs: IQueueOutputShape<OUTPUT>[];
   liveDetails: ILiveDetails;
   firstItem: boolean;
+  isStoped: boolean;
 };
 type ILiveDetails = {
   passed: number;
@@ -23,6 +24,7 @@ type IQueueOutputShape<OUTPUT> = {
   status: IActionResultStatus;
   actionType: IActionType;
 };
+type IQueueOnFinish<OUTPUT> = IQueueEntryOptions<OUTPUT>;
 
 const makeAction = <OUTPUT>(
   item: IQueueEntry<OUTPUT>,
@@ -83,15 +85,18 @@ export const simpleQueue = <OUTPUT = any>(
   items: IQueueEntry<OUTPUT>[],
   onRecord: ReplaySubject<IQueueOutputShape<OUTPUT>> = new ReplaySubject(items.length),
   onLive: Subject<IQueueOutputShape<OUTPUT>> = new Subject(),
-  onFinish: ReplaySubject<IQueueOutputShape<OUTPUT>[]> = new ReplaySubject(1),
+  onFinish: ReplaySubject<IQueueOnFinish<OUTPUT>> = new ReplaySubject(1),
+  onStop: ReplaySubject<IQueueOnFinish<OUTPUT>> = new ReplaySubject(1),
   liveDetails: ReplaySubject<ILiveDetails> = new ReplaySubject<ILiveDetails>(1),
   options: IQueueEntryOptions<OUTPUT> = {
     outputs: [],
     liveDetails: { fails: 0, passed: 0, finished: 0, total: items.length },
     firstItem: true,
+    isStoped: true,
   }
 ) => {
   if (options.firstItem == true) {
+    options.isStoped = false;
     liveDetails.next(options.liveDetails);
     options.firstItem = false;
   }
@@ -122,17 +127,24 @@ export const simpleQueue = <OUTPUT = any>(
           onRecord.next(v);
           onLive.next(v);
           let newList = _.drop(items);
-          simpleQueue(newList, onRecord, onLive, onFinish, liveDetails, options).start();
+          simpleQueue(newList, onRecord, onLive, onFinish, onStop, liveDetails, options).start();
         });
       } else {
-        onFinish.next(options.outputs);
+        options.isStoped = true;
+        onFinish.next(options);
       }
     },
     onRecord,
     onLive,
     onFinish,
+    onStop,
     liveDetails,
-    total: items.length,
+    totalItems: items.length,
+    stop: () => {
+      options.isStoped = true;
+      onStop.next(options);
+      onFinish.next(options);
+    },
   };
 };
 
