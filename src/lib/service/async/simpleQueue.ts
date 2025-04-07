@@ -1,11 +1,22 @@
-import { ref } from 'km-fresh';
 import _ from 'lodash';
 import { Observable, ReplaySubject, Subject } from 'rxjs';
+
 type IActionType = 'promise' | 'observable';
 type IActionResultStatus = 'success' | 'error';
 type IAsync<OUTPUT> = Promise<OUTPUT> | Observable<OUTPUT>;
 type IAction<OUTPUT> = (...args: unknown[]) => IAsync<OUTPUT>;
 type IQueueEntry<OUTPUT = any> = IAction<OUTPUT>;
+type IQueueEntryOptions<OUTPUT> = {
+  outputs: IQueueOutputShape<OUTPUT>[];
+  liveDetails: ILiveDetails;
+  firstItem: boolean;
+};
+type ILiveDetails = {
+  passed: number;
+  fails: number;
+  finished: number;
+  total: number;
+};
 
 type IQueueOutputShape<OUTPUT> = {
   result: OUTPUT;
@@ -45,7 +56,7 @@ const makeAction = <OUTPUT>(
   } else {
     commonOutput = {
       ...commonOutput,
-      actionType: 'promise',
+      actionType: 'observable',
     };
     action.subscribe({
       next: (response) => {
@@ -70,27 +81,58 @@ const makeAction = <OUTPUT>(
 
 export const simpleQueue = <OUTPUT = any>(
   items: IQueueEntry<OUTPUT>[],
-  onRecord: Subject<IQueueOutputShape<OUTPUT>> = new ReplaySubject(items.length),
+  onRecord: ReplaySubject<IQueueOutputShape<OUTPUT>> = new ReplaySubject(items.length),
   onLive: Subject<IQueueOutputShape<OUTPUT>> = new Subject(),
-  outputs: ReturnType<typeof ref<IQueueOutputShape<OUTPUT>[]>> = ref([])
+  onFinish: ReplaySubject<IQueueOutputShape<OUTPUT>[]> = new ReplaySubject(1),
+  liveDetails: ReplaySubject<ILiveDetails> = new ReplaySubject<ILiveDetails>(1),
+  options: IQueueEntryOptions<OUTPUT> = {
+    outputs: [],
+    liveDetails: { fails: 0, passed: 0, finished: 0, total: items.length },
+    firstItem: true,
+  }
 ) => {
+  if (options.firstItem == true) {
+    liveDetails.next(options.liveDetails);
+    options.firstItem = false;
+  }
   return {
-    start: (finish?: (v: ReturnType<typeof ref<IQueueOutputShape<OUTPUT>[]>>) => void) => {
+    start: () => {
       let item = _.first(items);
       if (item !== undefined) {
         makeAction(item, (v) => {
-          outputs.setHard([...outputs.value, v]);
+          if (v.status == 'success') {
+            options.liveDetails = {
+              ...options.liveDetails,
+              passed: options.liveDetails.passed + 1,
+            };
+            liveDetails.next(options.liveDetails);
+          } else if (v.status == 'error') {
+            options.liveDetails = {
+              ...options.liveDetails,
+              fails: options.liveDetails.fails + 1,
+            };
+            liveDetails.next(options.liveDetails);
+          }
+          options.liveDetails = {
+            ...options.liveDetails,
+            finished: options.liveDetails.finished + 1,
+          };
+          liveDetails.next(options.liveDetails);
+          options.outputs = [...options.outputs, v];
           onRecord.next(v);
           onLive.next(v);
           let newList = _.drop(items);
-          simpleQueue(newList, onRecord, onLive, outputs).start(() => finish && finish(outputs));
+          simpleQueue(newList, onRecord, onLive, onFinish, liveDetails, options).start();
         });
       } else {
-        finish && finish(outputs);
+        onFinish.next(options.outputs);
       }
     },
-    listener: onRecord,
-    outputs,
+    onRecord,
+    onLive,
+    onFinish,
+    liveDetails,
+    total: items.length,
   };
 };
 

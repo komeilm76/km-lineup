@@ -1,4 +1,3 @@
-import { ref } from 'km-fresh';
 import _ from 'lodash';
 import { Observable, ReplaySubject, Subject } from 'rxjs';
 type IActionType = 'promise' | 'observable';
@@ -9,6 +8,17 @@ type IQueueEntry<NAME extends string = string, OUTPUT = any> = {
   order?: number;
   name: NAME;
   action: IAction<OUTPUT>;
+};
+type IQueueEntryOptions<OUTPUT, NAME extends string> = {
+  outputs: IQueueOutputShape<OUTPUT, NAME>[];
+  liveDetails: ILiveDetails;
+  firstItem: boolean;
+};
+type ILiveDetails = {
+  passed: number;
+  fails: number;
+  finished: number;
+  total: number;
 };
 
 type IQueueOutputShape<OUTPUT, NAME extends string = string> = {
@@ -55,7 +65,7 @@ const makeAction = <OUTPUT, NAME extends string = string>(
   } else {
     commonOutput = {
       ...commonOutput,
-      actionType: 'promise',
+      actionType: 'observable',
     };
     action.subscribe({
       next: (response) => {
@@ -99,28 +109,59 @@ export const orderActions = <NAME extends string = string, OUTPUT = any>(
 
 export const advanceQueue = <NAME extends string = string, OUTPUT = any>(
   items: IQueueEntry<NAME, OUTPUT>[],
-  onRecord: Subject<IQueueOutputShape<OUTPUT, NAME>> = new ReplaySubject(items.length),
+  onRecord: ReplaySubject<IQueueOutputShape<OUTPUT, NAME>> = new ReplaySubject(items.length),
   onLive: Subject<IQueueOutputShape<OUTPUT, NAME>> = new Subject(),
-  outputs: ReturnType<typeof ref<IQueueOutputShape<OUTPUT, NAME>[]>> = ref([])
+  onFinish: ReplaySubject<IQueueOutputShape<OUTPUT, NAME>[]> = new ReplaySubject(1),
+  liveDetails: ReplaySubject<ILiveDetails> = new ReplaySubject<ILiveDetails>(1),
+  options: IQueueEntryOptions<OUTPUT, NAME> = {
+    outputs: [],
+    liveDetails: { fails: 0, passed: 0, finished: 0, total: items.length },
+    firstItem: true,
+  }
 ) => {
+  if (options.firstItem == true) {
+    liveDetails.next(options.liveDetails);
+    options.firstItem = false;
+  }
   return {
-    start: (finish?: (v: ReturnType<typeof ref<IQueueOutputShape<OUTPUT, NAME>[]>>) => void) => {
+    start: () => {
       let sortedItems = orderActions(items);
       let item = _.first(sortedItems);
       if (item !== undefined) {
         makeAction(item, (v) => {
-          outputs.setHard([...outputs.value, v]);
+          if (v.status == 'success') {
+            options.liveDetails = {
+              ...options.liveDetails,
+              passed: options.liveDetails.passed + 1,
+            };
+            liveDetails.next(options.liveDetails);
+          } else if (v.status == 'error') {
+            options.liveDetails = {
+              ...options.liveDetails,
+              fails: options.liveDetails.fails + 1,
+            };
+            liveDetails.next(options.liveDetails);
+          }
+          options.liveDetails = {
+            ...options.liveDetails,
+            finished: options.liveDetails.finished + 1,
+          };
+          liveDetails.next(options.liveDetails);
+          options.outputs = [...options.outputs, v];
           onRecord.next(v);
           onLive.next(v);
           let newList = _.drop(sortedItems);
-          advanceQueue(newList, onRecord, onLive, outputs).start(() => finish && finish(outputs));
+          advanceQueue(newList, onRecord, onLive, onFinish, liveDetails, options).start();
         });
       } else {
-        finish && finish(outputs);
+        onFinish.next(options.outputs);
       }
     },
-    listener: onRecord,
-    outputs,
+    onRecord,
+    onLive,
+    onFinish,
+    liveDetails,
+    total: items.length,
   };
 };
 
