@@ -162,6 +162,7 @@ export const advanceQueue = <NAME extends string = string, OUTPUT = any>(
           });
         } else {
           options.isStoped = true;
+          onStop.next(options);
           onFinish.next(options);
         }
       }

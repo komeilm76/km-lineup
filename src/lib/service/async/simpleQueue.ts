@@ -131,6 +131,7 @@ export const simpleQueue = <OUTPUT = any>(
         });
       } else {
         options.isStoped = true;
+        onStop.next(options);
         onFinish.next(options);
       }
     },
